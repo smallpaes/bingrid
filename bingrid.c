@@ -1,49 +1,61 @@
 #include "bingrid.h"
 
-bool apply_pairs(board *brd);
-bool apply_oxo(board *brd);
+typedef enum
+{
+  row,
+  column
+} target;
+
+bool apply_pairs(board *brd, int i, int j);
+bool apply_pairs2_target(board *brd, int i, int j, target t);
+bool apply_oxo(board *brd, int i, int j);
+bool apply_oxo2_target(board *brd, int i, int j, target t);
 bool apply_counting(board *brd);
-void apply_val_to_row(board *brd, int i, char val);
-void apply_val_to_col(board *brd, int j, int val);
+void increment_val(char v, int *z_cnt, int *o_cnt);
 int get_str_lng(char s[]);
 char get_opposite_val(char c);
 bool validate_grid(board *brd);
-bool validate_str(char s[]);
 bool check_grid_finished(board *brd);
-bool should_apply_all_val(int zero_cnt, int one_cnt, int sz);
+bool apply_val2_target(board *brd, int i, int zero_cnt, int one_cnt, target t);
 bool check_is_int(float f);
+void printboard(board *brd);
+bool validate_char(char c);
+bool cell_has_val(char c);
 
 bool str2board(board *brd, char *str)
 {
-  bool is_invalid_brb = !brd;
-  bool is_invalid_str = !str;
-  bool is_invalid_str_sz = get_str_lng(str) == 0 || get_str_lng(str) % 2 == 1 || get_str_lng(str) > pow(MAX, 2);
+  bool has_null_inputs = !brd || !str;
+  int str_size = get_str_lng(str);
+  bool is_invalid_str_sz = str_size == 0 || str_size % 2 == 1 || str_size > pow(MAX, 2);
 
-  // result must be an integer for all squares
+  // for a square, result must be an integer
   double brb_sz = sqrt((double)get_str_lng(str));
   is_invalid_str_sz = is_invalid_str_sz || !check_is_int(brb_sz);
 
-  if (is_invalid_brb || is_invalid_str || is_invalid_str_sz)
+  if (has_null_inputs || is_invalid_str_sz)
   {
-    return 0;
+    return false;
   }
 
   brd->sz = (int)brb_sz;
 
+  // write characters into respective cells
   for (int i = 0; i < brd->sz; i++)
   {
     for (int j = 0; j < brd->sz; j++)
     {
-      // make sure the characters are all valid ones
-      char val = str[brd->sz * i + j];
-      if (val != ONE && val != ZERO && val != UNK)
+      int str_idx = (i * brd->sz) + j;
+      // make sure characters are all valid ones
+      char val = str[str_idx];
+      bool is_valid_char = validate_char(val);
+      if (!is_valid_char)
       {
-        return 0;
+        return false;
       }
-      brd->b2d[i][j] = str[brd->sz * i + j];
+      brd->b2d[i][j] = str[str_idx];
     }
   }
-  return 1;
+  return true;
 }
 
 void board2str(char *str, board *brd)
@@ -55,125 +67,142 @@ void board2str(char *str, board *brd)
       str[i * brd->sz + j] = brd->b2d[i][j];
     }
   }
-  str[brd->sz * brd->sz] = '\0';
+  int last_inx = (int)pow(brd->sz, 2);
+  str[last_inx] = '\0';
 }
 
 bool solve_board(board *brd)
 {
+  if (!brd)
+  {
+    return false;
+  }
+
+  // used to check if any cells have been filled by the rules
   bool is_apply_pairs, is_apply_oxo, is_apply_counting, is_valid_board;
   do
   {
-    is_valid_board = validate_grid(brd);
-    if (!is_valid_board)
-    {
-      return false;
-    }
-    is_apply_pairs = apply_pairs(brd);
-    is_apply_oxo = apply_oxo(brd);
-    is_apply_counting = apply_counting(brd);
-    is_valid_board = validate_grid(brd);
+    // reset the status
+    is_apply_pairs = false;
+    is_apply_oxo = false;
 
+    // make sure it still meets basic requirements
+    is_valid_board = validate_grid(brd);
     if (!is_valid_board)
     {
       return false;
     }
+
+    for (int i = 0; i < brd->sz; i++)
+    {
+      for (int j = 0; j < brd->sz; j++)
+      {
+        apply_pairs(brd, i, j) && (is_apply_pairs = true);
+        apply_oxo(brd, i, j) && (is_apply_oxo = true);
+      }
+    }
+
+    is_apply_counting = apply_counting(brd);
   } while (is_apply_pairs || is_apply_oxo || is_apply_counting);
   return check_grid_finished(brd);
 }
 
-bool apply_pairs(board *brd)
+bool apply_pairs(board *brd, int i, int j)
+{
+  bool should_apply2_row = j < brd->sz - 1;
+  bool should_apply2_col = i < brd->sz - 1;
+
+  bool is_row_applied = should_apply2_row && apply_pairs2_target(brd, i, j, row);
+  bool is_col_applied = should_apply2_col && apply_pairs2_target(brd, i, j, column);
+
+  return is_row_applied || is_col_applied;
+}
+
+bool apply_pairs2_target(board *brd, int i, int j, target t)
 {
   bool is_applied = false;
 
-  for (int i = 0; i < brd->sz; i++)
+  int next_i = t ? i + 1 : i;
+  int next_next_i = t ? i + 2 : i;
+  int next_j = t ? j : j + 1;
+  int next_next_j = t ? j : j + 2;
+  int prev_i = t ? i - 1 : i;
+  int prev_j = t ? j : j - 1;
+
+  int current_val = brd->b2d[i][j];
+  int opposite_val = get_opposite_val(current_val);
+  bool has_val = current_val != UNK;
+  bool have2_same_val = current_val == brd->b2d[next_i][next_j];
+  bool is_next2_in_grid = next_next_i < brd->sz && next_next_j < brd->sz;
+  bool is_next2_empty = brd->b2d[next_next_i][next_next_j] == UNK;
+  bool is_prev_in_grid = prev_i >= 0 && prev_j >= 0;
+  bool is_prev_empty = brd->b2d[prev_i][prev_j] == UNK;
+  bool is_match_rule = has_val && have2_same_val;
+
+  // Apply value to the next next cell
+  if (is_match_rule && is_next2_in_grid && is_next2_empty)
   {
-    for (int j = 0; j < brd->sz; j++)
-    {
-      int current_val = brd->b2d[i][j];
-      int opposite_val = get_opposite_val(current_val);
-
-      // apply to rows
-      if (j < brd->sz - 1)
-      {
-
-        if (current_val != UNK && current_val == brd->b2d[i][j + 1])
-        {
-          if (j > 0 && brd->b2d[i][j - 1] == UNK)
-          {
-            is_applied = true;
-            brd->b2d[i][j - 1] = opposite_val;
-          }
-          if (j + 2 < brd->sz && brd->b2d[i][j + 2] == UNK)
-          {
-            is_applied = true;
-            brd->b2d[i][j + 2] = opposite_val;
-          }
-        }
-      }
-
-      // apply to columns
-      if (i < brd->sz - 1)
-      {
-        if (current_val != UNK && current_val == brd->b2d[i + 1][j])
-        {
-          if (i > 0 && brd->b2d[i - 1][j] == UNK)
-          {
-            is_applied = true;
-            brd->b2d[i - 1][j] = opposite_val;
-          }
-          if (i + 2 < brd->sz && brd->b2d[i + 2][j] == UNK)
-          {
-            is_applied = true;
-            brd->b2d[i + 2][j] = opposite_val;
-          }
-        }
-      }
-    }
+    is_applied = true;
+    brd->b2d[next_next_i][next_next_j] = opposite_val;
+  }
+  // Apply value to the previous cell
+  if (is_match_rule && is_prev_in_grid && is_prev_empty)
+  {
+    is_applied = true;
+    brd->b2d[prev_i][prev_j] = opposite_val;
   }
 
   return is_applied;
 }
 
-bool apply_oxo(board *brd)
+bool apply_oxo(board *brd, int i, int j)
+{
+  bool is_row_applied = false;
+  bool is_col_applied = false;
+  int current_val = brd->b2d[i][j];
+  bool has_val = cell_has_val(current_val);
+
+  if (!has_val)
+  {
+    return false;
+  }
+
+  // apply to rows
+  if (j < brd->sz - 2)
+  {
+    is_row_applied = apply_oxo2_target(brd, i, j, row);
+  }
+
+  // apply to columns
+  if (i < brd->sz - 2)
+  {
+    is_col_applied = apply_oxo2_target(brd, i, j, column);
+  }
+
+  return is_row_applied || is_col_applied;
+}
+
+bool apply_oxo2_target(board *brd, int i, int j, target t)
 {
   bool is_applied = false;
 
-  for (int i = 0; i < brd->sz; i++)
+  int next_i = t ? i + 1 : i;
+  int next_next_i = t ? i + 2 : i;
+  int next_j = t ? j : j + 1;
+  int next_next_j = t ? j : j + 2;
+
+  int current_val = brd->b2d[i][j];
+  int opposite_val = get_opposite_val(current_val);
+  int next2_val = brd->b2d[next_next_i][next_next_j];
+  bool have2_same_val = current_val == next2_val;
+  int next_val = brd->b2d[next_i][next_j];
+  bool is_next_empty = !cell_has_val(next_val);
+
+  if (have2_same_val && is_next_empty)
   {
-    for (int j = 0; j < brd->sz; j++)
-    {
-      int current_val = brd->b2d[i][j];
-      int opposite_val = get_opposite_val(current_val);
-
-      // apply to rows
-      if (j < brd->sz - 2)
-      {
-
-        if (current_val != UNK && current_val == brd->b2d[i][j + 2])
-        {
-          if (brd->b2d[i][j + 1] == UNK)
-          {
-            is_applied = true;
-            brd->b2d[i][j + 1] = opposite_val;
-          }
-        }
-      }
-
-      // apply to columns
-      if (i < brd->sz - 2)
-      {
-        if (current_val != UNK && current_val == brd->b2d[i + 2][j])
-        {
-          if (brd->b2d[i + 1][j] == UNK)
-          {
-            is_applied = true;
-            brd->b2d[i + 1][j] = opposite_val;
-          }
-        }
-      }
-    }
+    is_applied = true;
+    brd->b2d[next_i][next_j] = opposite_val;
   }
-
   return is_applied;
 }
 
@@ -181,85 +210,57 @@ bool apply_counting(board *brd)
 {
   bool is_applied = false;
 
-  // apply to rows
   for (int i = 0; i < brd->sz; i++)
   {
-    int zero_cnt = 0;
-    int one_cnt = 0;
+    int row_zero_cnt = 0;
+    int row_one_cnt = 0;
+    int col_zero_cnt = 0;
+    int col_one_cnt = 0;
 
     for (int j = 0; j < brd->sz; j++)
     {
+      // Count row cells
       int current_val = brd->b2d[i][j];
-      if (current_val == ONE)
-      {
-        one_cnt++;
-      }
-      else if (current_val == ZERO)
-      {
-        zero_cnt++;
-      }
+      increment_val(current_val, &row_zero_cnt, &row_one_cnt);
+
+      // Count column cells
+      current_val = brd->b2d[j][i];
+      increment_val(current_val, &col_zero_cnt, &col_one_cnt);
     }
 
-    if (should_apply_all_val(zero_cnt, one_cnt, brd->sz / 2))
-    {
-      char completed_val = zero_cnt == brd->sz / 2 ? ZERO : ONE;
-      apply_val_to_row(brd, i, get_opposite_val(completed_val));
-      is_applied = true;
-    }
-  }
+    // Apply to row
+    bool is_r_applied = apply_val2_target(brd, i, row_zero_cnt, row_one_cnt, row);
 
-  // apply to columns
-  for (int j = 0; j < brd->sz; j++)
-  {
-    int zero_cnt = 0;
-    int one_cnt = 0;
+    // Apply to column
+    bool is_c_applied = apply_val2_target(brd, i, col_zero_cnt, col_one_cnt, column);
 
-    for (int i = 0; i < brd->sz; i++)
-    {
-      int current_val = brd->b2d[i][j];
-      if (current_val == ONE)
-      {
-        one_cnt++;
-      }
-      else if (current_val == ZERO)
-      {
-        zero_cnt++;
-      }
-    }
-    if (should_apply_all_val(zero_cnt, one_cnt, brd->sz / 2))
-    {
-      char completed_val = zero_cnt == brd->sz / 2 ? ZERO : ONE;
-      apply_val_to_col(brd, j, get_opposite_val(completed_val));
-      is_applied = true;
-    }
+    (is_r_applied || is_c_applied) && (is_applied = true);
   }
   return is_applied;
 }
 
-void apply_val_to_row(board *brd, int i, char val)
+void increment_val(char v, int *z_cnt, int *o_cnt)
 {
-  for (int j = 0; j < brd->sz; j++)
+  if (v == ONE)
   {
-    if (brd->b2d[i][j] == UNK)
-    {
-      brd->b2d[i][j] = val;
-    }
+    *o_cnt = *o_cnt + 1;
   }
-}
-
-void apply_val_to_col(board *brd, int j, int val)
-{
-  for (int i = 0; i < brd->sz; i++)
+  else if (v == ZERO)
   {
-    if (brd->b2d[i][j] == UNK)
-    {
-      brd->b2d[i][j] = val;
-    }
+    *z_cnt = *z_cnt + 1;
+  }
+  else
+  {
+    return;
   }
 }
 
 int get_str_lng(char s[])
 {
+  if (s == NULL)
+  {
+    return false;
+  }
   int index = 0;
   while (s[index])
   {
@@ -288,7 +289,7 @@ bool validate_grid(board *brd)
     for (int j = 0; j < brd->sz; j++)
     {
       int current_val = brd->b2d[i][j];
-      bool is_filled_cell = current_val != UNK;
+      bool is_filled_cell = cell_has_val(current_val);
       bool should_validate_row = j < brd->sz - 2;
       bool should_validate_col = i < brd->sz - 2;
 
@@ -321,7 +322,7 @@ bool check_grid_finished(board *brd)
   {
     for (int j = 0; j < brd->sz; j++)
     {
-      if (brd->b2d[i][j] == UNK)
+      if (!cell_has_val(brd->b2d[i][j]))
       {
         return false;
       }
@@ -330,13 +331,35 @@ bool check_grid_finished(board *brd)
   return true;
 }
 
-bool should_apply_all_val(int zero_cnt, int one_cnt, int half_sz)
+bool apply_val2_target(board *brd, int i, int zero_cnt, int one_cnt, target t)
 {
-  bool is_found_all_val = zero_cnt == half_sz && one_cnt == half_sz;
+  int half_sz = brd->sz / 2;
   bool is_zero_completed = zero_cnt == half_sz;
   bool is_one_completed = one_cnt == half_sz;
+  bool should_apply = is_zero_completed ^ is_one_completed;
 
-  return !is_found_all_val && (is_zero_completed || is_one_completed);
+  if (!should_apply)
+  {
+    return false;
+  }
+
+  char completed_val = zero_cnt == half_sz ? ZERO : ONE;
+
+  for (int j = 0; j < brd->sz; j++)
+  {
+    // apply value to the cell in a specific row
+    if (t == 0 && !cell_has_val(brd->b2d[i][j]))
+    {
+      brd->b2d[i][j] = get_opposite_val(completed_val);
+    }
+    // apply value to the cell in a specific column
+    else if (t == 1 && !cell_has_val(brd->b2d[j][i]))
+    {
+      brd->b2d[j][i] = get_opposite_val(completed_val);
+    }
+  }
+
+  return true;
 }
 
 bool check_is_int(float f)
@@ -346,94 +369,213 @@ bool check_is_int(float f)
   return !(r > 0);
 }
 
+void printboard(board *brd)
+{
+  for (int i = 0; i < brd->sz; i++)
+  {
+    for (int j = 0; j < brd->sz; j++)
+    {
+      printf("%c ", brd->b2d[i][j]);
+    }
+    printf("\n");
+  }
+}
+
+bool validate_char(char c)
+{
+  switch (c)
+  {
+  case ONE:
+  case ZERO:
+  case UNK:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool cell_has_val(char c)
+{
+  switch (c)
+  {
+  case ONE:
+  case ZERO:
+    return true;
+  default:
+    return false;
+  }
+}
+
 void test(void)
 {
   board b;
 
   char test_s1[] = "123";
   char test_s2[] = "";
+
+  int test_zero_cnt = 0;
+  int test_one_cnt = 0;
+
+  assert(get_str_lng(NULL) == 0);
   assert(get_str_lng(test_s1) == 3);
   assert(get_str_lng(test_s2) == 0);
+
+  assert(validate_char(ONE) == true);
+  assert(validate_char(ZERO) == true);
+  assert(validate_char(UNK) == true);
+  assert(validate_char('X') == false);
+
+  assert(cell_has_val(ONE) == true);
+  assert(cell_has_val(ZERO) == true);
+  assert(cell_has_val(UNK) == false);
 
   assert(get_opposite_val(ONE) == ZERO);
   assert(get_opposite_val(ZERO) == ONE);
 
-  assert(!should_apply_all_val(2, 2, 2));
-  assert(should_apply_all_val(2, 0, 2));
-  assert(should_apply_all_val(1, 2, 2));
-
   assert(check_is_int(4) == true);
   assert(check_is_int(3.2) == false);
+
+  // Add one to One
+  increment_val(ONE, &test_zero_cnt, &test_one_cnt);
+  assert(test_zero_cnt == 0);
+  assert(test_one_cnt == 1);
+
+  // Add one to Zero
+  increment_val(ZERO, &test_zero_cnt, &test_one_cnt);
+  assert(test_zero_cnt == 1);
+  assert(test_one_cnt == 1);
+
+  // Invalid input add nothing to One & Zero
+  increment_val('x', &test_zero_cnt, &test_one_cnt);
+  assert(test_zero_cnt == 1);
+  assert(test_one_cnt == 1);
 
   // Invalid 3x4 Board
   assert(str2board(&b, "...1.0......") == false);
 
+  // Invalid 4x4 Board: Contain an invalid character
+  assert(str2board(&b, "..x1.0......1..1") == false);
+  assert(str2board(&b, "33.1.0......1..1") == false);
+
   // Valid 4x4 Board
   str2board(&b, "...1.0......1..1");
-
-  // Invalid 4x4 Board
-  assert(str2board(&b, "33.1.0......1..1") == false);
 
   // Valid 4x4 Board
   assert(str2board(&b, "...1.0......1..1") == true);
   assert(validate_grid(&b) == true);
 
-  // TODO: Valid 4x4 Board: test apply to row
-  assert(str2board(&b, "0.0......1.1....") == true);
+  // Apply value to all empty cells in a row: Not needed
+  assert(str2board(&b, "0.1......1.0....") == true);
   assert(validate_grid(&b) == true);
-  apply_val_to_row(&b, 0, ONE);
+  assert(apply_val2_target(&b, 0, 1, 1, row) == false);
 
-  // TODO: Valid 4x4 Board: test apply to column
-  assert(str2board(&b, ".1.......1......") == true);
+  // Apply value to all empty cells in a column: Not needed
+  assert(str2board(&b, "0.1......1.0....") == true);
   assert(validate_grid(&b) == true);
-  apply_val_to_col(&b, 1, ZERO);
+  assert(apply_val2_target(&b, 0, 1, 1, column) == false);
 
-  // TODO: Valid 4x4 Board: test apply counting
+  // Apply value to all empty cells in a row: Succeed
+  assert(str2board(&b, "00........11....") == true);
+  assert(validate_grid(&b) == true);
+  assert(apply_val2_target(&b, 0, 2, 0, row) == true);
+  assert(b.b2d[0][2] == ONE);
+  assert(b.b2d[0][3] == ONE);
+  assert(b.b2d[0][0] == ZERO);
+  assert(b.b2d[0][1] == ZERO);
+
+  // Apply value to all empty cells in a column: Succeed
+  assert(str2board(&b, "11......1100....") == true);
+  assert(validate_grid(&b) == true);
+  assert(apply_val2_target(&b, 0, 0, 2, column) == true);
+  assert(b.b2d[1][0] == ZERO);
+  assert(b.b2d[3][0] == ZERO);
+  assert(b.b2d[0][0] == ONE);
+  assert(b.b2d[2][0] == ONE);
+
+  // Counting rule: Applied needed
   assert(str2board(&b, "00........11....") == true);
   assert(validate_grid(&b) == true);
   assert(apply_counting(&b) == true);
 
-  // TODO: Valid 4x4 Board: test apply counting
+  // Counting rule: Applied needed
   assert(str2board(&b, "0.0.............") == true);
   assert(validate_grid(&b) == true);
   assert(apply_counting(&b) == true);
 
-  // TODO: Valid 4x4 Board: test apply counting
+  // Counting rule: Applied not needed
   assert(str2board(&b, "0...............") == true);
   assert(validate_grid(&b) == true);
   assert(apply_counting(&b) == false);
 
-  // TODO: Valid finished 4x4 Board
+  // Finished 4x4 Board
   assert(str2board(&b, "0011110000111100") == true);
   assert(validate_grid(&b) == true);
   assert(check_grid_finished(&b) == true);
 
-  // TODO: Valid unfinished 4x4 Board
+  // Unfinished 4x4 Board
   assert(str2board(&b, "0011....0011....") == true);
   assert(validate_grid(&b) == true);
   assert(check_grid_finished(&b) == false);
 
-  // Invalid 4x4 Board
+  // Invalid 4x4 Board: Row
   assert(str2board(&b, "1111.0......1..1") == true);
   assert(validate_grid(&b) == false);
 
-  // Pairs rule applied once
+  // Invalid 4x4 Board: Column
+  assert(str2board(&b, "1001100110010110") == true);
+  assert(validate_grid(&b) == false);
+
+  // Applied One to adjacent cells in a row
+  assert(str2board(&b, ".00..11.........") == true);
+  assert(validate_grid(&b) == true);
+  assert(apply_pairs2_target(&b, 0, 1, row) == true);
+  assert(b.b2d[0][3] == ONE);
+  assert(b.b2d[0][0] == ONE);
+
+  // Applied Zero to adjacent cells in a column
+  assert(str2board(&b, ".....11..1......") == true);
+  assert(validate_grid(&b) == true);
+  assert(apply_pairs2_target(&b, 1, 1, column) == true);
+  assert(b.b2d[0][1] == ZERO);
+  assert(b.b2d[3][1] == ZERO);
+
+  // Pairs rule: Empty cell should be skipped
   assert(str2board(&b, "00...11.........") == true);
   assert(validate_grid(&b) == true);
-  assert(apply_pairs(&b) == true);
+  assert(apply_pairs(&b, 0, 3) == false);
 
-  // Pairs rule applied not needed
+  // Pairs rule: Empty cell should be skipped
+  assert(str2board(&b, "00...11.........") == true);
+  assert(validate_grid(&b) == true);
+  assert(apply_pairs(&b, 3, 0) == false);
+
+  // Pairs rule: Applied to row succeed
+  assert(str2board(&b, "00...11.........") == true);
+  assert(validate_grid(&b) == true);
+  assert(apply_pairs(&b, 0, 0) == true);
+
+  // Pairs rule: Applied not needed
   assert(str2board(&b, "0..1.01..10.1..0") == true);
   assert(validate_grid(&b) == true);
-  assert(apply_pairs(&b) == false);
+  assert(apply_pairs(&b, 2, 2) == false);
 
-  // OXO rule applied once
+  // OXO rule: Applied once
   assert(str2board(&b, "0.0..1.......1..") == true);
   assert(validate_grid(&b) == true);
-  assert(apply_oxo(&b) == true);
+  assert(apply_oxo(&b, 0, 0) == true);
 
-  // Pairs rule applied not needed
+  // OXO rule: Applied not needed
   assert(str2board(&b, "0..0.1..1..1..1.") == true);
   assert(validate_grid(&b) == true);
-  assert(apply_oxo(&b) == false);
+  assert(apply_oxo(&b, 0, 0) == false);
+
+  // OXO rule: skip current index
+  assert(str2board(&b, "0.0..1.......1..") == true);
+  assert(validate_grid(&b) == true);
+  assert(apply_oxo(&b, 0, 3) == false);
+
+  // OXO rule: skip current index
+  assert(str2board(&b, "0.0..1.......1..") == true);
+  assert(validate_grid(&b) == true);
+  assert(apply_oxo(&b, 3, 0) == false);
 }
